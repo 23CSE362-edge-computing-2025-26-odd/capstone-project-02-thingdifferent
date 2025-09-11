@@ -19,6 +19,24 @@ class LyapunovHeuristicScheduler:
         self.T = [0] * len_T
         self.E = [0] * len_T
 
+    
+    def calculate_T_E(self, assignment, workload_data):
+        CompTimeTotal = 0
+        CommTimeTotal = 0
+        E_cost = 0
+
+        for i in range(self.num_nodes):
+            if assignment[i] == 0:  # Source node
+                for j in range(self.num_nodes):
+                    if assignment[j] == 1:  # Sink node
+                        comp_time = self.C * workload_data[i] / self.F[j]
+                        comm_time = self.L * workload_data[i] / self.R[i][j]
+                        CompTimeTotal += comp_time
+                        CommTimeTotal += comm_time
+                        E_cost += self.CommCost[i][j] * workload_data[i]
+
+        return CompTimeTotal, CommTimeTotal, E_cost
+
 
     def simplified_drift_plus_penalty(self, assignment, workload_data, t):
         num_sources = np.sum(assignment == 0)
@@ -31,8 +49,6 @@ class LyapunovHeuristicScheduler:
         objective = self.V * (comp_time + comm_time) + self.Q[t] * (e_cost - self.E_avg)
         return objective
     
-
-
         
     def PSO_Node_Assignment(self, workload_data, t):
         popsize = 20
@@ -100,3 +116,17 @@ class LyapunovHeuristicScheduler:
         self.T[t] = comp_time + comm_time
         self.E[t] = e_cost
 
+    def step(self, workload_data, t):
+        best_assignment, _ = self.PSO_Node_Assignment(workload_data, t)
+        self.Harmony_Search_Task_Scheduler(best_assignment, workload_data, t)
+
+        if t < self.len_T - 1:
+            self.Q[t + 1] = max(self.Q[t] + self.E[t] - self.E_avg, 0)
+
+    def run(self):
+        for t in tqdm(range(self.len_T), desc="Running"):
+            workload_data = self.arrived_lists[t]
+            self.step(workload_data, t)
+        T_avg = sum(self.T) / self.len_T
+        E_avg_ = sum(self.E) / self.len_T
+        print("\nT_avg:", T_avg, "E_avg:", E_avg_)
