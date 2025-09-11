@@ -80,4 +80,23 @@ class LyapunovHeuristicScheduler:
                 gbest = pbest[np.argmin(pbest_fx)]
 
         return gbest, gbest_fx
+    
+    def Harmony_Search_Task_Scheduler(self, best_assignment, workload_data, t):
+        sources = [i for i, role in enumerate(best_assignment) if role == 0]
+        sinks = [i for i, role in enumerate(best_assignment) if role == 1]
+        isolated = [i for i, role in enumerate(best_assignment) if role == 2]
+
+        total_offload_workload = sum(workload_data[s] for s in sources)
+        total_sink_capacity = sum(1 - workload_data[s] for s in sinks)
+
+        if total_offload_workload > 0 and total_sink_capacity > 0:
+            for source_node in sources:
+                source_offload = workload_data[source_node]
+                for sink_node in sinks:
+                    sink_fraction = (1 - workload_data[sink_node]) / total_sink_capacity
+                    tasks_to_send = source_offload * sink_fraction
+
+        comp_time, comm_time, e_cost = self.calculate_T_E(best_assignment, workload_data)
+        self.T[t] = comp_time + comm_time
+        self.E[t] = e_cost
 
