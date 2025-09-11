@@ -98,23 +98,47 @@ class LyapunovHeuristicScheduler:
         return gbest, gbest_fx
     
     def Harmony_Search_Task_Scheduler(self, best_assignment, workload_data, t):
+        print(f"\n--- Time Slot {t+1} ---")
+        print(f"Node Workloads: {[f'{w:.4f}' for w in workload_data]}")
+        print(f"PSO Optimal Assignment: {best_assignment}")
+
         sources = [i for i, role in enumerate(best_assignment) if role == 0]
         sinks = [i for i, role in enumerate(best_assignment) if role == 1]
         isolated = [i for i, role in enumerate(best_assignment) if role == 2]
 
+        print(f"Identified Sources: {sources}")
+        print(f"Identified Sinks: {sinks}")
+        print(f"Identified Isolated Nodes: {isolated}")
+
         total_offload_workload = sum(workload_data[s] for s in sources)
         total_sink_capacity = sum(1 - workload_data[s] for s in sinks)
+
+        print(f"Total Offload Workload: {total_offload_workload:.4f}")
+        print(f"Total Sink Capacity: {total_sink_capacity:.4f}")
 
         if total_offload_workload > 0 and total_sink_capacity > 0:
             for source_node in sources:
                 source_offload = workload_data[source_node]
+                print(f"  Source Node {source_node+1} (Workload {source_offload:.4f}) offloads:")
+
                 for sink_node in sinks:
                     sink_fraction = (1 - workload_data[sink_node]) / total_sink_capacity
                     tasks_to_send = source_offload * sink_fraction
+                    print(f"    → {tasks_to_send:.4f} units to Sink Node {sink_node+1}")
+
+        else:
+            print("No offloading or sink capacity available.")
+
+        if isolated:
+            for isolated_node in isolated:
+                print(f"  Isolated Node {isolated_node+1} processes its own workload: {workload_data[isolated_node]:.4f}")
 
         comp_time, comm_time, e_cost = self.calculate_T_E(best_assignment, workload_data)
         self.T[t] = comp_time + comm_time
         self.E[t] = e_cost
+
+        print(f"Computed Metrics — Computation Time: {comp_time:.4f}, Communication Time: {comm_time:.4f}, Energy Cost: {e_cost:.4f}")
+        print(f"Updated Virtual Queue Q[{t}] = {self.Q[t]:.4f}")
 
     def step(self, workload_data, t):
         best_assignment, _ = self.PSO_Node_Assignment(workload_data, t)
