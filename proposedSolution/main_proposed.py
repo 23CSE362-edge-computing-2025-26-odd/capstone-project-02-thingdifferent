@@ -1,6 +1,7 @@
 import random
 import numpy as np
 from tqdm import tqdm
+from utils import parse_variables
 
 class LyapunovHeuristicScheduler:
     def _init_(self, num_node, arrived_lists, len_T, E_avg, F, R, C, L, CommCost, V):
@@ -154,3 +155,24 @@ class LyapunovHeuristicScheduler:
         T_avg = sum(self.T) / self.len_T
         E_avg_ = sum(self.E) / self.len_T
         print("\nT_avg:", T_avg, "E_avg:", E_avg_)
+
+
+if __name__ == '__main__':
+    input_file = 'variables.txt'
+    variables = parse_variables(input_file)
+
+    num_node = variables['num_node']
+    arrived_lists = variables['arrived_lists']
+    F = variables['F']
+    R = variables['R']
+    C = variables['C']
+    L = variables['L']
+    CommCost = variables['CommCost']
+    V = 100000
+    E_avg = 20
+    len_T = variables['len_T']
+
+    print("Loaded variables from variables.txt")
+
+    scheduler = LyapunovHeuristicScheduler(num_node, arrived_lists, len_T, E_avg, F, R, C, L, CommCost, V)
+    scheduler.run()
