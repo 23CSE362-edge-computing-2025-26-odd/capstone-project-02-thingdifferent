@@ -4,7 +4,7 @@ from tqdm import tqdm
 from utils import parse_variables
 
 class LyapunovHeuristicScheduler:
-    def _init_(self, num_node, arrived_lists, len_T, E_avg, F, R, C, L, CommCost, V):
+    def __init__(self, num_node, arrived_lists, len_T, E_avg, F, R, C, L, CommCost, V):
         self.num_nodes = num_node
         self.len_T = len_T
         self.arrived_lists = arrived_lists
