@@ -163,10 +163,10 @@ if __name__ == '__main__':
 
     num_node = variables['num_node']
     arrived_lists = variables['arrived_lists']
-    F = variables['F']
-    R = variables['R']
-    C = variables['C']
-    L = variables['L']
+    F = variables['F'] #CPU Capacity
+    R = variables['R'] #bandwidth
+    C = variables['C'] #energy efficiency
+    L = variables['L'] #data size per task
     CommCost = variables['CommCost']
     V = 100000
     E_avg = 20
