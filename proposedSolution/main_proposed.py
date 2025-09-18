@@ -112,7 +112,8 @@ class LyapunovHeuristicScheduler:
         print(f"Identified Isolated Nodes: {isolated}")
 
         total_offload_workload = sum(workload_data[s] for s in sources)
-        total_sink_capacity = sum(1 - workload_data[s] for s in sinks)
+        sink_capacities = {j: self.F[j] / self.C for j in sinks}  # capacity per sink
+        total_sink_capacity = sum(sink_capacities.values())
 
         print(f"Total Offload Workload: {total_offload_workload:.4f}")
         print(f"Total Sink Capacity: {total_sink_capacity:.4f}")
@@ -123,12 +124,12 @@ class LyapunovHeuristicScheduler:
                 print(f"  Source Node {source_node+1} (Workload {source_offload:.4f}) offloads:")
 
                 for sink_node in sinks:
-                    sink_fraction = (1 - workload_data[sink_node]) / total_sink_capacity
+                    sink_fraction = sink_capacities[sink_node] / total_sink_capacity
                     tasks_to_send = source_offload * sink_fraction
                     print(f"    → {tasks_to_send:.4f} units to Sink Node {sink_node+1}")
 
         else:
-            print("No offloading or sink capacity available.")
+            print("No feasible offloading due to lack of sink capacity or workload.")
 
         if isolated:
             for isolated_node in isolated:
@@ -138,7 +139,8 @@ class LyapunovHeuristicScheduler:
         self.T[t] = comp_time + comm_time
         self.E[t] = e_cost
 
-        print(f"Computed Metrics — Computation Time: {comp_time:.4f}, Communication Time: {comm_time:.4f}, Energy Cost: {e_cost:.4f}")
+        print(f"Computed Metrics — Computation Time: {comp_time:.4f}, "
+              f"Communication Time: {comm_time:.4f}, Energy Cost: {e_cost:.4f}")
         print(f"Updated Virtual Queue Q[{t}] = {self.Q[t]:.4f}")
 
     def step(self, workload_data, t):
