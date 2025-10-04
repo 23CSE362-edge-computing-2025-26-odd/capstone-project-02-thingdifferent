@@ -1,11 +1,9 @@
-"""controller.py"""
 import numpy as np
 import random
-import math
-from .utils import generate_random_list, boundary_check, copyx, crossover, mutation, distribute_evenly
+from tqdm import tqdm
+from .utils import distribute_evenly
 
-
-class LyapunovScheduler:
+class LyapunovPSOScheduler:
     def __init__(self, edge_servers, num_node, F, R, C, L, CommCost, V, E_avg):
         self.edge_servers = edge_servers
         self.num_node = num_node
@@ -17,210 +15,132 @@ class LyapunovScheduler:
         self.V = V
         self.E_avg = E_avg
 
+        # Lyapunov states
         self.Q = [0]          # Virtual queue
-        self.E = [0]          # Energy per time slot
-        self.T = []           # Optional: computation + communication time
-        self.t = -1           # Current time slot
+        self.E = [0]          # Energy per slot
+        self.T = []           # Time metrics
+        self.t = -1
         self.steps = 0
-        self._agents = {}     # MobileDevices registered as agents
+        self._agents = {}     # Mobile devices
         self.scheduling_decision = [[0]*num_node for _ in range(num_node)]
 
+    # ---- Computation and Energy Calculation ----
+    def calculate_T_E(self, assignment, workload_data):
+        CompTimeTotal = 0
+        CommTimeTotal = 0
+        E_cost = 0
+        for i in range(self.num_node):
+            if assignment[i] == 0:  # Source node
+                for j in range(self.num_node):
+                    if assignment[j] == 1:  # Sink node
+                        comp_time = self.C * workload_data[i] / (self.F[j] + 1e-10)
+                        comm_time = self.L * workload_data[i] / (self.R[i][j] + 1e-10)
+                        CompTimeTotal += comp_time
+                        CommTimeTotal += comm_time
+                        E_cost += self.CommCost[i][j] * workload_data[i]
+        return CompTimeTotal, CommTimeTotal, E_cost
+
+    # ---- Lyapunov Drift-Penalty Objective ----
+    def simplified_drift_plus_penalty(self, assignment, workload_data):
+        num_sources = np.sum(assignment == 0)
+        num_sinks = np.sum(assignment == 1)
+        if num_sources == 0 or num_sinks == 0:
+            return 1e9
+
+        comp_time, comm_time, e_cost = self.calculate_T_E(assignment, workload_data)
+        objective = self.V * (comp_time + comm_time) + self.Q[-1] * (e_cost - self.E_avg)
+        return objective
+
+    # ---- PSO for Node Role Assignment ----
+    def PSO_Node_Assignment(self, workload_data):
+        popsize = 20
+        c1, c2 = 2.0, 2.0
+        w_initial, w_final = 0.9, 0.4
+        G = 50
+
+        pop = np.random.randint(0, 3, size=(popsize, self.num_node))
+        pbest = np.copy(pop)
+        pbest_fx = np.array([self.simplified_drift_plus_penalty(p, workload_data) for p in pop])
+
+        gbest_idx = np.argmin(pbest_fx)
+        gbest = np.copy(pop[gbest_idx])
+        gbest_fx = pbest_fx[gbest_idx]
+
+        for i in range(1, G + 1):
+            w = w_initial - (w_initial - w_final) * (i / G)
+            for j in range(popsize):
+                r1, r2 = np.random.rand(self.num_node), np.random.rand(self.num_node)
+                update_prob = w + c1 * r1 + c2 * r2
+                new_pop_j = np.copy(pop[j])
+                for k in range(self.num_node):
+                    if update_prob[k] > 2.0:
+                        new_pop_j[k] = gbest[k]
+                    elif update_prob[k] > 1.0:
+                        new_pop_j[k] = pbest[j, k]
+                    else:
+                        new_pop_j[k] = np.random.randint(0, 3)
+
+                fx_j = self.simplified_drift_plus_penalty(new_pop_j, workload_data)
+                if fx_j < pbest_fx[j]:
+                    pbest[j] = new_pop_j
+                    pbest_fx[j] = fx_j
+
+            min_fx = np.min(pbest_fx)
+            if min_fx < gbest_fx:
+                gbest_fx = min_fx
+                gbest = np.copy(pbest[np.argmin(pbest_fx)])
+
+        return gbest, gbest_fx
+
+    # ---- Harmony-based Task Distribution ----
+    def Harmony_Search_Task_Scheduler(self, best_assignment, workload_data):
+        sources = [i for i, r in enumerate(best_assignment) if r == 0]
+        sinks = [i for i, r in enumerate(best_assignment) if r == 1]
+        isolated = [i for i, r in enumerate(best_assignment) if r == 2]
+
+        total_offload = sum(workload_data[s] for s in sources)
+        sink_cap = {j: self.F[j]/self.C for j in sinks}
+        total_cap = sum(sink_cap.values())
+
+        scheduling_decision = [[0]*self.num_node for _ in range(self.num_node)]
+
+        if total_offload > 0 and total_cap > 0:
+            for s in sources:
+                src_load = workload_data[s]
+                for j in sinks:
+                    frac = sink_cap[j] / total_cap
+                    tasks = src_load * frac
+                    scheduling_decision[s][j] = tasks
+        else:
+            for i in isolated:
+                scheduling_decision[i][i] = workload_data[i]
+
+        comp_time, comm_time, e_cost = self.calculate_T_E(best_assignment, workload_data)
+        return scheduling_decision, comp_time, comm_time, e_cost
+
+    # ---- One Simulation Step ----
     def step(self):
         self.steps += 1
         self.t += 1
 
-        # Gather tasks per agent at this time slot
-        arrived_lists = [len(agent.task_queue) for agent in self._agents.values()]
+        workload_data = [len(agent.task_queue) for agent in self._agents.values()]
+        best_assignment, _ = self.PSO_Node_Assignment(workload_data)
+        scheduling_decision, comp_t, comm_t, e_t = self.Harmony_Search_Task_Scheduler(best_assignment, workload_data)
 
-        # Select nodes with non-zero F
-        non_zero_indices = [i for i, f in enumerate(self.F) if f != 0]
+        self.T.append(comp_t + comm_t)
+        self.E.append(e_t)
+        self.scheduling_decision = scheduling_decision
 
-        # GA Parameters
-        xlim = [0, 1, 2]
-        popsize = len(non_zero_indices)
-        chromlength = self.num_node
-        pc, pm, G = 0.6, 0.1, 50
-
-        # Generate initial population using paper's logic
-        pop = np.zeros((popsize, chromlength), dtype=int)
-        for idx in range(popsize):
-            pop[idx] = generate_random_list(len(non_zero_indices), xlim)
-        
-        # Evaluate initial population
-        scheduling_decisions, obj = self.calobjvalue_GA(pop, arrived_lists)
-        best_obj_idx = np.argmin(obj)
-        best_decision = scheduling_decisions[best_obj_idx]
-        obj_best = [obj[best_obj_idx]]
-        scheduling_decision_best = [best_decision]
-
-        # GA iterations
-        for g in range(1, G):
-            newpop = copyx(pop, obj, popsize)
-            newpop = crossover(non_zero_indices, newpop, pc, popsize)
-            newpop = mutation(non_zero_indices, newpop, pm, popsize)
-
-            _, new_obj = self.calobjvalue_GA(newpop, arrived_lists)
-            index = np.where(new_obj < obj)[0]
-            pop[index] = newpop[index]
-
-            scheduling_decisions, obj = self.calobjvalue_GA(pop, arrived_lists)
-            best_val = min(obj)
-            best_scheduling_decision = scheduling_decisions[np.argmin(obj)]
-            obj_best.append(best_val)
-            scheduling_decision_best.append(best_scheduling_decision)
-
-        # Select the best decision
-        best_obj = min(obj_best)
-        best_decision = scheduling_decision_best[np.argmin(obj_best)]
-        self.scheduling_decision = best_decision
-
-        # Compute energy and update virtual queue
-        E_t = self.get_E(best_decision)
-        self.E.append(E_t)
-        Q_next = max(self.Q[-1] + E_t - self.E_avg, 0)
+        # Update Lyapunov queue
+        Q_next = max(self.Q[-1] + e_t - self.E_avg, 0)
         self.Q.append(Q_next)
 
-        # Clear tasks
+        # Clear processed tasks
         for agent in self._agents.values():
             agent.task_queue = []
 
-    def calobjvalue_GA(self, pop, arrived_lists):
-        obj = np.zeros(pop.shape[0])
-        scheduling_decisions = []
-
-        for idx in range(pop.shape[0]):
-            source_nodes = [i for i in range(self.num_node) if pop[idx][i] == 0]
-            sink_nodes = [i for i in range(self.num_node) if pop[idx][i] == 1]
-
-            non_zero_indices = [[] for _ in range(self.num_node)]
-            for i in range(self.num_node):
-                if i in source_nodes:
-                    if self.F[i] == 0:
-                        non_zero_indices[i].extend(sink_nodes)
-                    else:
-                        non_zero_indices[i].append(i)
-                        non_zero_indices[i].extend(sink_nodes)
-                elif i in sink_nodes:
-                    non_zero_indices[i].append(i)
-                else:
-                    non_zero_indices[i].append(i)
-
-            dim_opt = [len(non_zero_indices[i]) - 1 for i in range(self.num_node)]
-
-            if any(x >= 1 for x in dim_opt):
-                # Harmony Search bounds
-                lb = [0]*sum(dim_opt)
-                ub = []
-                for i in range(self.num_node):
-                    for _ in range(dim_opt[i]):
-                        ub.append(arrived_lists[i])
-
-                hms, iter_, hmcr, par, bw = 30, max(ub), 0.8, 0.1, 0.1
-                nnew = len(lb)
-                scheduling_decision, obj[idx] = self.Harmony_Search(non_zero_indices, dim_opt, hms, iter_,
-                                                                    hmcr, par, bw, nnew, lb, ub, arrived_lists)
-                scheduling_decisions.append(scheduling_decision)
-            else:
-                # Fallback distribution
-                scheduling_decision = [[0]*self.num_node for _ in range(self.num_node)]
-                non_zero_idx = [i for i, x in enumerate(self.F) if x != 0]
-                dist_count = len(non_zero_idx)
-                for n in range(self.num_node):
-                    dist = distribute_evenly(arrived_lists[n], dist_count)
-                    for k, val in enumerate(dist):
-                        scheduling_decision[n][non_zero_idx[k]] = val
-                obj[idx] = 1e10
-                scheduling_decisions.append(scheduling_decision)
-
-        return scheduling_decisions, obj
-
-    def Harmony_Search(self, non_zero_indices, dim_opt, hms, iter_, hmcr, par, bw, nnew,
-                        lb, ub, arrived_lists):
-        pos = [[random.randint(lb[j], ub[j]) for j in range(len(lb))] for _ in range(hms)]
-        score = [self.calobjvalue_HS(p, non_zero_indices, dim_opt, arrived_lists) for p in pos]
-
-        gbest = min(score)
-        gbest_pos = pos[score.index(gbest)].copy()
-
-        for _ in range(iter_):
-            new_pos, new_score = [], []
-            for _ in range(nnew):
-                temp_pos = []
-                for j in range(len(lb)):
-                    if random.random() < hmcr:
-                        ind = random.randint(0, hms-1)
-                        val = pos[ind][j]
-                        if random.random() < par:
-                            val += math.floor(random.normalvariate(0,1)*bw*(ub[j]-lb[j]))
-                        temp_pos.append(val)
-                    else:
-                        temp_pos.append(random.randint(lb[j], ub[j]))
-                temp_pos = boundary_check(temp_pos, lb, ub)
-                new_pos.append(temp_pos)
-                new_score.append(self.calobjvalue_HS(temp_pos, non_zero_indices, dim_opt, arrived_lists))
-
-            pos.extend(new_pos)
-            score.extend(new_score)
-            sorted_idx = np.argsort(score)[:hms]
-            pos = [pos[i] for i in sorted_idx]
-            score = [score[i] for i in sorted_idx]
-
-            if score[0] < gbest:
-                gbest = score[0]
-                gbest_pos = pos[0].copy()
-
-        # Build final scheduling decision
-        g = [0]*self.num_node
-        for i in range(self.num_node):
-            if dim_opt[i]==0:
-                g[i] = arrived_lists[i]
-            else:
-                g[i] = arrived_lists[i] - sum(gbest_pos[sum(dim_opt[:i]):sum(dim_opt[:i+1])])
-
-        if all(x>=0 for x in g):
-            scheduling_decision = [[0]*self.num_node for _ in range(self.num_node)]
-            for j in range(self.num_node):
-                if dim_opt[j]==0:
-                    scheduling_decision[j][non_zero_indices[j][0]] = arrived_lists[j]
-                else:
-                    for idx_ in range(dim_opt[j]):
-                        scheduling_decision[j][non_zero_indices[j][idx_]] = gbest_pos[sum(dim_opt[:j])+idx_]
-                    scheduling_decision[j][non_zero_indices[j][-1]] = g[j]
-            return scheduling_decision, gbest
-        else:
-            # fallback
-            scheduling_decision = [[0]*self.num_node for _ in range(self.num_node)]
-            non_zero_idx = [i for i, x in enumerate(self.F) if x != 0]
-            dist_count = len(non_zero_idx)
-            for n in range(self.num_node):
-                dist = distribute_evenly(arrived_lists[n], dist_count)
-                for k, val in enumerate(dist):
-                    scheduling_decision[n][non_zero_idx[k]] = val
-            return scheduling_decision, 1e10
-
-    def calobjvalue_HS(self, temp_pos, non_zero_indices, dim_opt, arrived_lists):
-        g = [0]*self.num_node
-        for i in range(self.num_node):
-            if dim_opt[i]==0:
-                g[i] = arrived_lists[i]
-            else:
-                g[i] = arrived_lists[i] - sum(temp_pos[sum(dim_opt[:i]):sum(dim_opt[:i+1])])
-
-        if not all(x>=0 for x in g):
-            return 1e10
-
-        scheduling_decision = [[0]*self.num_node for _ in range(self.num_node)]
-        for j in range(self.num_node):
-            if dim_opt[j]==0:
-                scheduling_decision[j][non_zero_indices[j][0]] = arrived_lists[j]
-            else:
-                for idx_ in range(dim_opt[j]):
-                    scheduling_decision[j][non_zero_indices[j][idx_]] = temp_pos[sum(dim_opt[:j])+idx_]
-                scheduling_decision[j][non_zero_indices[j][-1]] = g[j]
-
-        T = sum([self.C*sum(scheduling_decision[n])/(self.F[n]+1e-10) for n in range(self.num_node)])
-        E = sum([self.CommCost[n][m]*scheduling_decision[n][m] for n in range(self.num_node) for m in range(self.num_node)])
-        return self.V*T + self.Q[self.t]*(E - self.E_avg)
-
-    def get_E(self, scheduling_decision):
-        return sum([self.CommCost[n][m]*scheduling_decision[n][m] for n in range(self.num_node) for m in range(self.num_node)])
+    # ---- Summary ----
+    def get_results(self):
+        T_avg = np.mean(self.T)
+        E_avg_ = np.mean(self.E)
+        return T_avg, E_avg_, self.Q[-1]
