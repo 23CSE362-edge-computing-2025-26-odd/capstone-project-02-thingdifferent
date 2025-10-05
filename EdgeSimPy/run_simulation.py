@@ -1,12 +1,10 @@
-"""run_simulation.py"""
 import random
 import numpy as np
 from edge_sim_py.central_controller.controller import LyapunovPSOScheduler
-from utils import parse_variables  # ✅ Import parser
+from edge_sim_py.components.edge_server import EdgeServer
+from utils import parse_variables
 
-# -----------------------------
-# Load Parameters from variables.txt
-# -----------------------------
+# Load simulation parameters from variables.txt
 input_file = 'variables.txt'
 variables = parse_variables(input_file)
 
@@ -16,45 +14,32 @@ F = np.array(variables['F'])
 R = np.array(variables['R'])
 C = variables['C']
 L = variables['L']
+T = variables['t']
 CommCost = np.array(variables['CommCost'])
-V = variables.get('V', 1000)       # default if not present
-E_avg = variables.get('E_avg', 20) # default if not present
+V = variables.get('V', 1000)
+E_avg = variables.get('E_avg', 20)
 arrived_lists = variables.get('arrived_lists', None)
 
-print("✅ Loaded parameters from variables.txt")
+print("Loaded parameters from variables.txt")
 print(f"Nodes: {NUM_NODES}, Time Slots: {TIME_SLOTS}")
 print(f"CPU Capacities (F): {F}")
 print(f"Bandwidth Matrix (R): {R.shape}")
 print(f"CommCost Matrix (CommCost): {CommCost.shape}")
 print(f"L={L}, C={C}, V={V}, E_avg={E_avg}")
 
-# -----------------------------
-# Mock mobile device agents
-# -----------------------------
-class MobileDevice:
-    def __init__(self, id):
-        self.id = id
-        self.task_queue = []
+# Initialize EdgeServer agents with capacity from variables
+edge_servers = {
+    i: EdgeServer(
+        obj_id=i,
+        cpu=int(F[i]),
+        memory=8,
+        disk=64,
+    ) for i in range(NUM_NODES)
+}
 
-    def generate_tasks(self, base_workload):
-        """Simulate tasks for each node using pre-loaded or random workload."""
-        if base_workload is not None:
-            # use preloaded task pattern if available
-            self.task_queue = [1] * int(base_workload)
-        else:
-            num_tasks = random.randint(0, 5)
-            self.task_queue = [1] * num_tasks
-
-# -----------------------------
-# Initialize agents
-# -----------------------------
-agents = {i: MobileDevice(i) for i in range(NUM_NODES)}
-
-# -----------------------------
-# Initialize PSO-based Scheduler
-# -----------------------------
+# Initialize scheduler (central controller)
 scheduler = LyapunovPSOScheduler(
-    edge_servers=list(range(NUM_NODES)),
+    edge_servers=list(edge_servers.keys()),
     num_node=NUM_NODES,
     F=F,
     R=R,
@@ -64,38 +49,38 @@ scheduler = LyapunovPSOScheduler(
     V=V,
     E_avg=E_avg
 )
-scheduler._agents = agents
+scheduler._agents = edge_servers
 
-# -----------------------------
-# Run Simulation
-# -----------------------------
-for t in range(TIME_SLOTS):
+# Simulation loop with task assignment, processing, resource update, scheduling step
+for t in range(T):
     print(f"\n--- Time Slot {t+1} ---")
 
-    # Step 1: Generate workload
+    # Advance time step on each edge server (release resources of completed tasks)
+    for server in edge_servers.values():
+        server.step()  # invokes process_time_step internally
+
+    # Generate workload for this timeslot (random or predefined)
     if arrived_lists:
-        workload_data = arrived_lists[t % len(arrived_lists)]
+        workload_data = arrived_lists[random.randint(0,TIME_SLOTS - 1)]
     else:
-        workload_data = [random.randint(0, 5) for _ in range(NUM_NODES)]
+        workload_data = [random.randint(0, 3) for _ in range(NUM_NODES)]
 
-    for i, agent in agents.items():
-        agent.generate_tasks(workload_data[i])
-        print(f"Agent {i} tasks: {len(agent.task_queue)}")
+    # Assign new tasks with resource demands
+    for i, server in edge_servers.items():
+        server.assign_tasks(workload_data[i])  # Add new tasks
+        print(f"EdgeServer {i} Active Tasks: {len(server.processing_tasks)}, CPU Demand: {server.cpu_demand}")
 
-    # Step 2: Run PSO + Harmony scheduling
+    # Update scheduler's view of available CPU capacity (capacity - demand)
+    available_cpu = np.array([server.cpu - server.cpu_demand for server in edge_servers.values()])
+    scheduler.F = available_cpu
+
+    # Run scheduling step to update internal states and schedule tasks
     scheduler.step()
-
-    # Step 3: Print metrics
-    # print("Scheduling Decision:")
-    # for n in range(NUM_NODES):
-    #     print(f"Node {n}: {scheduler.scheduling_decision[n]}")
 
     print(f"Energy (E_t): {scheduler.E[-1]:.4f}")
     print(f"Lyapunov Queue (Q_t): {scheduler.Q[-1]:.4f}")
 
-# -----------------------------
-# Summary
-# -----------------------------
+# After simulation, print final statistics
 T_avg, E_avg_result, Q_final = scheduler.get_results()
 print("\n=== Simulation Summary ===")
 print(f"Average Task Processing Time (T_avg): {T_avg:.4f}")

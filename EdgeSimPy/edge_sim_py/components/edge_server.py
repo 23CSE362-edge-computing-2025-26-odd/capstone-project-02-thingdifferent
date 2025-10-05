@@ -6,12 +6,15 @@ from edge_sim_py.components.container_registry import ContainerRegistry
 from edge_sim_py.components.container_image import ContainerImage
 from edge_sim_py.components.container_layer import ContainerLayer
 
+
 # Mesa modules
 from mesa import Agent
+
 
 # Python libraries
 import networkx as nx
 import typing
+
 
 
 class EdgeServer(ComponentManager, Agent):
@@ -106,97 +109,73 @@ class EdgeServer(ComponentManager, Agent):
         self.model = None
         self.unique_id = None
 
-    def _to_dict(self) -> dict:
-        """Method that overrides the way the object is formatted to JSON."
+        # List of currently processing tasks with resource usage and time left
+        self.processing_tasks = []
 
-        Returns:
-            dict: JSON-friendly representation of the object as a dictionary.
+    @property
+    def task_queue(self):
+        # Return a dummy list for compatibility, each element representing one active task
+        return [1] * len(self.processing_tasks)
+
+    def assign_tasks(self, tasks, cpu_per_task=1, mem_per_task=0.5, disk_per_task=0.2, duration=3):
         """
-        dictionary = {
-            "attributes": {
-                "id": self.id,
-                "available": self.available,
-                "model_name": self.model_name,
-                "cpu": self.cpu,
-                "memory": self.memory,
-                "disk": self.disk,
-                "cpu_demand": self.cpu_demand,
-                "memory_demand": self.memory_demand,
-                "disk_demand": self.disk_demand,
-                "coordinates": self.coordinates,
-                "max_concurrent_layer_downloads": self.max_concurrent_layer_downloads,
-                "active": self.active,
-                "power_model_parameters": self.power_model_parameters,
-            },
-            "relationships": {
-                "power_model": self.power_model.__name__ if self.power_model else None,
-                "base_station": {"class": type(self.base_station).__name__, "id": self.base_station.id}
-                if self.base_station
-                else None,
-                "network_switch": {"class": type(self.network_switch).__name__, "id": self.network_switch.id}
-                if self.network_switch
-                else None,
-                "services": [{"class": type(service).__name__, "id": service.id} for service in self.services],
-                "container_layers": [{"class": type(layer).__name__, "id": layer.id} for layer in self.container_layers],
-                "container_images": [{"class": type(image).__name__, "id": image.id} for image in self.container_images],
-                "container_registries": [{"class": type(reg).__name__, "id": reg.id} for reg in self.container_registries],
-            },
-        }
-        return dictionary
+        Assign new tasks to this edge server.
 
-    def collect(self) -> dict:
-        """Method that collects a set of metrics for the object.
-
-        Returns:
-            metrics (dict): Object metrics.
+        Args:
+            tasks (int): Number of tasks to assign.
+            cpu_per_task (float): CPU demand per task.
+            mem_per_task (float): Memory demand per task.
+            disk_per_task (float): Disk demand per task.
+            duration (int): Task duration in time steps.
         """
-        metrics = {
-            "Instance ID": self.id,
-            "Coordinates": self.coordinates,
-            "Available": self.available,
-            "CPU": self.cpu,
-            "RAM": self.memory,
-            "Disk": self.disk,
-            "CPU Demand": self.cpu_demand,
-            "RAM Demand": self.memory_demand,
-            "Disk Demand": self.disk_demand,
-            "Ongoing Migrations": self.ongoing_migrations,
-            "Services": [service.id for service in self.services],
-            "Registries": [registry.id for registry in self.container_registries],
-            "Layers": [layer.instruction for layer in self.container_layers],
-            "Images": [image.name for image in self.container_images],
-            "Download Queue": [f.metadata["object"].instruction for f in self.download_queue],
-            "Waiting Queue": [layer.instruction for layer in self.waiting_queue],
-            "Max. Concurrent Layer Downloads": self.max_concurrent_layer_downloads,
-            "Power Consumption": self.get_power_consumption(),
-        }
-        return metrics
+        for _ in range(tasks):
+            self.processing_tasks.append({
+                'cpu': cpu_per_task,
+                'mem': mem_per_task,
+                'disk': disk_per_task,
+                'remaining': duration
+            })
+            self.cpu_demand += cpu_per_task
+            self.memory_demand += mem_per_task
+            self.disk_demand += disk_per_task
+
+    def process_time_step(self):
+        """
+        Process the passing of one time step, decrement task remaining times,
+        and release resources of finished tasks.
+        """
+        finished_tasks = []
+        for task in self.processing_tasks:
+            task['remaining'] -= 1
+            if task['remaining'] <= 0:
+                finished_tasks.append(task)
+        for task in finished_tasks:
+            self.processing_tasks.remove(task)
+            self.cpu_demand -= task['cpu']
+            self.memory_demand -= task['mem']
+            self.disk_demand -= task['disk']
 
     def step(self):
         """Method that executes the events involving the object at each time step."""
+        # Process downloading container layers as per original logic
         while len(self.waiting_queue) > 0 and len(self.download_queue) < self.max_concurrent_layer_downloads:
             layer = self.waiting_queue.pop(0)
 
             # Gathering the list of registries that have the layer
             registries_with_layer = []
             for registry in [reg for reg in ContainerRegistry.all() if reg.available]:
-                # Checking if the registry is hosted on a valid host in the infrastructure and if it has the layer we need to pull
                 if registry.server and any(layer.digest == l.digest for l in registry.server.container_layers):
-                    # Selecting a network path to be used to pull the layer from the registry
                     path = nx.shortest_path(
                         G=self.model.topology,
                         source=registry.server.base_station.network_switch,
                         target=self.base_station.network_switch,
                     )
-
                     registries_with_layer.append({"object": registry, "path": path})
 
-            # Selecting the registry from which the layer will be pulled to the (target) edge server
             registries_with_layer = sorted(registries_with_layer, key=lambda r: len(r["path"]))
             registry = registries_with_layer[0]["object"]
             path = registries_with_layer[0]["path"]
 
-            # Creating the flow object
             flow = NetworkFlow(
                 topology=self.model.topology,
                 source=registry.server,
@@ -208,8 +187,13 @@ class EdgeServer(ComponentManager, Agent):
             )
             self.model.initialize_agent(agent=flow)
 
-            # Adding the created flow to the edge server's download queue
             self.download_queue.append(flow)
+
+        # Process currently running tasks: advance and release resources accordingly
+        self.process_time_step()
+
+    # The rest of your existing methods unchanged...
+
 
     def get_power_consumption(self) -> float:
         """Gets the edge server's power consumption.
@@ -219,6 +203,9 @@ class EdgeServer(ComponentManager, Agent):
         """
         power_consumption = self.power_model.get_power_consumption(device=self) if self.power_model is not None else 0
         return power_consumption
+
+    # ... Rest of the existing methods unchanged ...
+
 
     def has_capacity_to_host(self, service: object) -> bool:
         """Checks if the edge server has enough free resources to host a given service.

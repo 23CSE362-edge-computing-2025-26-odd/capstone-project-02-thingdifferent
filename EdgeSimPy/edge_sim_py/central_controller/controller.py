@@ -3,7 +3,6 @@ import random
 from tqdm import tqdm
 from .utils import distribute_evenly
 
-
 class LyapunovPSOScheduler:
     def __init__(self, edge_servers, num_node, F, R, C, L, CommCost, V, E_avg):
         self.edge_servers = edge_servers
@@ -171,9 +170,12 @@ class LyapunovPSOScheduler:
         Q_next = max(self.Q[-1] + e_t - self.E_avg, 0)
         self.Q.append(Q_next)
 
-        # Clear processed tasks
+        # Clear processed tasks properly by clearing internal processing_tasks list
         for agent in self._agents.values():
-            agent.task_queue = []
+            agent.processing_tasks.clear()
+            agent.cpu_demand = 0
+            agent.memory_demand = 0
+            agent.disk_demand = 0
 
     # ---------------------------------------------------------------------
     # Results Summary
