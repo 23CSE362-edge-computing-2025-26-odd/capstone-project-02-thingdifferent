@@ -2,6 +2,7 @@ import random
 import numpy as np
 from tqdm import tqdm
 from utils import parse_variables
+import matplotlib.pyplot as plt  
 
 class LyapunovHeuristicScheduler:
     def __init__(self, num_node, arrived_lists, len_T, E_avg, F, R, C, L, CommCost, V):
@@ -150,6 +151,14 @@ class LyapunovHeuristicScheduler:
         if t < self.len_T - 1:
             self.Q[t + 1] = max(self.Q[t] + self.E[t] - self.E_avg, 0)
 
+    # def run(self):
+    #     for t in tqdm(range(self.len_T), desc="Running"):
+    #         workload_data = self.arrived_lists[t]
+    #         self.step(workload_data, t)
+    #     T_avg = sum(self.T) / self.len_T
+    #     E_avg_ = sum(self.E) / self.len_T
+    #     print("\nT_avg:", T_avg, "E_avg:", E_avg_)
+
     def run(self):
         for t in tqdm(range(self.len_T), desc="Running"):
             workload_data = self.arrived_lists[t]
@@ -158,6 +167,40 @@ class LyapunovHeuristicScheduler:
         E_avg_ = sum(self.E) / self.len_T
         print("\nT_avg:", T_avg, "E_avg:", E_avg_)
 
+        # ---- Virtual Queue Plot ----
+        plt.figure(figsize=(8, 5))
+        plt.plot(range(self.len_T), self.Q, marker='o', linestyle='-', color='tab:blue')
+        plt.title('Virtual Queue Evolution over Time (Lyapunov PSO Scheduler)', fontsize=13)
+        plt.xlabel('Time Slot (t)', fontsize=12)
+        plt.ylabel('Virtual Queue Q[t]', fontsize=12)
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.show()
+
+
+# if __name__ == '__main__':
+#     input_file = 'variables.txt'
+#     variables = parse_variables(input_file)
+
+#     num_node = variables['num_node']
+#     arrived_lists = variables['arrived_lists']
+#     F = variables['F'] #CPU Capacity
+#     R = variables['R'] #bandwidth
+#     C = variables['C'] #energy efficiency
+#     L = variables['L'] #data size per task
+#     CommCost = variables['CommCost']
+#     V = 100000
+#     E_avg = 20
+#     len_T = variables['len_T']
+
+#     print("Loaded variables from variables.txt")
+
+#     scheduler = LyapunovHeuristicScheduler(num_node, arrived_lists, len_T, E_avg, F, R, C, L, CommCost, V)
+#     scheduler.run()
+
+
+
+
 
 if __name__ == '__main__':
     input_file = 'variables.txt'
@@ -165,12 +208,12 @@ if __name__ == '__main__':
 
     num_node = variables['num_node']
     arrived_lists = variables['arrived_lists']
-    F = variables['F'] #CPU Capacity
-    R = variables['R'] #bandwidth
-    C = variables['C'] #energy efficiency
-    L = variables['L'] #data size per task
+    F = variables['F'] # CPU Capacity
+    R = variables['R'] # Bandwidth
+    C = variables['C'] # Energy efficiency
+    L = variables['L'] # Data size per task
     CommCost = variables['CommCost']
-    V = 100000
+    V = 100
     E_avg = 20
     len_T = variables['len_T']
 

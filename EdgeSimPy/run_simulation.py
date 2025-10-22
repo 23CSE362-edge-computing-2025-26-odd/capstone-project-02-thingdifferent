@@ -1,47 +1,48 @@
 import random
 import numpy as np
-from edge_sim_py.central_controller.controller import LyapunovPSOScheduler
+from tqdm import tqdm 
+# Ensure the import path is correct for your environment
+from edge_sim_py.central_controller.controller import LyapunovPSOScheduler 
 from edge_sim_py.components.edge_server import EdgeServer
 from utils import parse_variables
 
-# Load simulation parameters from variables.txt
+# --- 1. Load Simulation Parameters ---
 input_file = 'variables.txt'
 variables = parse_variables(input_file)
 
 NUM_NODES = variables['num_node']
-TIME_SLOTS = variables['len_T']
-F = np.array(variables['F'])
+F_initial = np.array(variables['F']) 
 R = np.array(variables['R'])
 C = variables['C']
 L = variables['L']
-T = variables['t']
 CommCost = np.array(variables['CommCost'])
 V = variables.get('V', 1000)
 E_avg = variables.get('E_avg', 20)
 arrived_lists = variables.get('arrived_lists', None)
 
-print("Loaded parameters from variables.txt")
-print(f"Nodes: {NUM_NODES}, Time Slots: {TIME_SLOTS}")
-print(f"CPU Capacities (F): {F}")
-print(f"Bandwidth Matrix (R): {R.shape}")
-print(f"CommCost Matrix (CommCost): {CommCost.shape}")
-print(f"L={L}, C={C}, V={V}, E_avg={E_avg}")
+# Determine Simulation Length (T) based on available workload data
+T_SIM = len(arrived_lists) if arrived_lists else 100 
 
-# Initialize EdgeServer agents with capacity from variables
+print("Loaded parameters from variables.txt")
+print(f"Nodes: {NUM_NODES}, Simulation Length (T): {T_SIM} slots")
+print(f"CPU Capacities (F_initial): {F_initial}")
+print(f"Control Parameters: V={V}, E_avg={E_avg}")
+
+# --- 2. Initialize EdgeServer Agents ---
 edge_servers = {
     i: EdgeServer(
         obj_id=i,
-        cpu=int(F[i]),
+        cpu=int(F_initial[i]), # Set initial total CPU capacity
         memory=8,
         disk=64,
     ) for i in range(NUM_NODES)
 }
 
-# Initialize scheduler (central controller)
+# --- 3. Initialize Scheduler (Central Controller) ---
 scheduler = LyapunovPSOScheduler(
     edge_servers=list(edge_servers.keys()),
     num_node=NUM_NODES,
-    F=F,
+    F=F_initial, 
     R=R,
     C=C,
     L=L,
@@ -51,38 +52,45 @@ scheduler = LyapunovPSOScheduler(
 )
 scheduler._agents = edge_servers
 
-# Simulation loop with task assignment, processing, resource update, scheduling step
-for t in range(T):
-    print(f"\n--- Time Slot {t+1} ---")
 
-    # Advance time step on each edge server (release resources of completed tasks)
+# --- 4. Simulation Loop (Sequential Time Steps) ---
+for t in tqdm(range(T_SIM), desc=f"Running Simulation (V={V}, E_avg={E_avg})"):
+
+    # 4a. Advance time step on each edge server (internal EdgeSimPy cleanup)
     for server in edge_servers.values():
-        server.step()  # invokes process_time_step internally
+        server.step() 
 
-    # Generate workload for this timeslot (random or predefined)
-    if arrived_lists:
-        workload_data = arrived_lists[random.randint(0,TIME_SLOTS - 1)]
+    # 4b. Generate Workload (SEQUENTIAL ACCESS)
+    if arrived_lists and t < len(arrived_lists):
+        workload_data = arrived_lists[t]
     else:
+        # Fallback for missing data
         workload_data = [random.randint(0, 3) for _ in range(NUM_NODES)]
-
-    # Assign new tasks with resource demands
+    
+    # 4c. Assign new tasks to local queues
     for i, server in edge_servers.items():
-        server.assign_tasks(workload_data[i])  # Add new tasks
-        print(f"EdgeServer {i} Active Tasks: {len(server.processing_tasks)}, CPU Demand: {server.cpu_demand}")
+        num_tasks = int(workload_data[i])
+        
+        # Inject tasks as dictionaries with CPU demand into the server's task_queue
+        new_tasks = []
+        for j in range(num_tasks):
+             new_tasks.append({'cpu_demand': C, 'id': f"Task_{t}_{i}_{j}"})
+             
+        server.task_queue.extend(new_tasks)
 
-    # Update scheduler's view of available CPU capacity (capacity - demand)
-    available_cpu = np.array([server.cpu - server.cpu_demand for server in edge_servers.values()])
-    scheduler.F = available_cpu
+    # 4d. Update scheduler's F to reflect total capacity (F_initial)
+    scheduler.F = F_initial 
 
-    # Run scheduling step to update internal states and schedule tasks
-    scheduler.step()
+    # 4e. Run scheduling step (PASS WORKLOAD_DATA DIRECTLY)
+    scheduler.step(workload_data)
 
-    print(f"Energy (E_t): {scheduler.E[-1]:.4f}")
-    print(f"Lyapunov Queue (Q_t): {scheduler.Q[-1]:.4f}")
+# --- 5. Print Final Statistics (Capture ALL new metrics) ---
+T_avg, E_avg_result, Q_final, avg_throughput, offloading_ratio, avg_energy_per_task = scheduler.get_results()
 
-# After simulation, print final statistics
-T_avg, E_avg_result, Q_final = scheduler.get_results()
 print("\n=== Simulation Summary ===")
-print(f"Average Task Processing Time (T_avg): {T_avg:.4f}")
-print(f"Average Energy Consumption (E_avg): {E_avg_result:.4f}")
+print(f"Average Task Latency (T_avg): {T_avg:.4f} (sec/task)")
+print(f"Average Energy Cost (E_avg): {E_avg_result:.4f} (J/slot)")
 print(f"Final Virtual Queue Level (Q_final): {Q_final:.4f}")
+print(f"Average Throughput: {avg_throughput:.4f} (tasks/slot)")
+print(f"Overall Offloading Ratio: {offloading_ratio:.4f}")
+print(f"Avg Energy per Task: {avg_energy_per_task:.6f} (J/task)")
