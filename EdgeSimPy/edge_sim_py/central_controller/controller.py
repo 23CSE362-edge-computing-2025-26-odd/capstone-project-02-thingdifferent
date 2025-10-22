@@ -3,6 +3,7 @@ import random
 from tqdm import tqdm
 from .utils import distribute_evenly
 
+
 class LyapunovPSOScheduler:
     def __init__(self, edge_servers, num_node, F, R, C, L, CommCost, V, E_avg):
         self.edge_servers = edge_servers
@@ -24,9 +25,15 @@ class LyapunovPSOScheduler:
         self._agents = {}
         self.scheduling_decision = [[0]*num_node for _ in range(num_node)]
 
+        # --- NEW METRICS TRACKING ---
+        self.Total_Tasks_Arrived = 0
+        self.Total_Tasks_Offloaded = 0
+        self.Total_Tasks_Processed = 0 # Processed = Arrived in this model due to queue clearing
+
     # ---------------------------------------------------------------------
     # Computation and Energy Calculation
     # ---------------------------------------------------------------------
+    # (Existing function: calculate_T_E remains unchanged)
     def calculate_T_E(self, assignment, workload_data):
         CompTimeTotal = 0
         CommTimeTotal = 0
@@ -35,6 +42,10 @@ class LyapunovPSOScheduler:
             if assignment[i] == 0:  # Source
                 for j in range(self.num_node):
                     if assignment[j] == 1:  # Sink
+                        # The calculation assumes that tasks are perfectly distributed,
+                        # and this metric function is used both for the LDPP and the final
+                        # time/energy calculation after the Harmony Search logic.
+                        # It is not directly used for the metric tracking, but for cost evaluation.
                         comp_time = self.C * workload_data[i] / (self.F[j] + 1e-10)
                         comm_time = self.L * workload_data[i] / (self.R[i][j] + 1e-10)
                         CompTimeTotal += comp_time
@@ -118,9 +129,18 @@ class LyapunovPSOScheduler:
         print(f"Identified Isolated Nodes: {isolated}")
 
         # Compute capacities and total workload
+        total_workload = sum(workload_data)
         total_offload = sum(workload_data[s] for s in sources)
         sink_cap = {j: self.F[j] / self.C for j in sinks}
         total_cap = sum(sink_cap.values())
+        
+        # --- NEW METRICS UPDATE ---
+        # NOTE: workload_data here represents the new tasks arrived this slot
+        self.Total_Tasks_Arrived += total_workload
+        self.Total_Tasks_Offloaded += total_offload
+        # Since the scheduler clears all queues after step(), we assume all arrived tasks are processed/completed
+        self.Total_Tasks_Processed += total_workload
+        # ---------------------------
 
         print(f"Total Offload Workload: {total_offload:.4f}")
         print(f"Total Sink Capacity: {total_cap:.4f}")
@@ -181,6 +201,18 @@ class LyapunovPSOScheduler:
     # Results Summary
     # ---------------------------------------------------------------------
     def get_results(self):
-        T_avg = np.mean(self.T) if self.T else 0
-        E_avg_ = np.mean(self.E) if self.E else 0
-        return T_avg, E_avg_, self.Q[-1]
+            T_avg = np.mean(self.T) if self.T else 0
+            E_total = np.sum(self.E)
+            E_avg_ = E_total / self.steps if self.steps else 0
+            Q_final = self.Q[-1]
+
+            # --- CALCULATE NEW METRICS ---
+            # Assuming Throughput is the number of tasks processed per time slot (tasks/slot)
+            Avg_Throughput = self.Total_Tasks_Processed / self.steps if self.steps else 0
+            # Overall Offloading Ratio (OOR) = Total Offloaded Tasks / Total Arrived Tasks
+            OOR = self.Total_Tasks_Offloaded / self.Total_Tasks_Arrived if self.Total_Tasks_Arrived > 0 else 0
+            # Avg Energy per Task = Total Energy Consumed / Total Tasks Processed
+            E_per_Task = E_total / self.Total_Tasks_Processed if self.Total_Tasks_Processed > 0 else 0
+            # -----------------------------
+
+            return T_avg, E_avg_, Q_final, Avg_Throughput, OOR, E_per_Task

@@ -61,7 +61,9 @@ for t in range(T):
 
     # Generate workload for this timeslot (random or predefined)
     if arrived_lists:
-        workload_data = arrived_lists[random.randint(0,TIME_SLOTS - 1)]
+        # NOTE: The original code uses a random index, which might not be T. 
+        # I'll keep the original logic but note it's unusual.
+        workload_data = arrived_lists[random.randint(0,TIME_SLOTS - 1)] 
     else:
         workload_data = [random.randint(0, 3) for _ in range(NUM_NODES)]
 
@@ -81,8 +83,13 @@ for t in range(T):
     print(f"Lyapunov Queue (Q_t): {scheduler.Q[-1]:.4f}")
 
 # After simulation, print final statistics
-T_avg, E_avg_result, Q_final = scheduler.get_results()
+# UNPACKING NEW METRICS: Avg_Throughput, OOR, E_per_Task
+T_avg, E_avg_result, Q_final, Avg_Throughput, OOR, E_per_Task = scheduler.get_results()
+
 print("\n=== Simulation Summary ===")
 print(f"Average Task Processing Time (T_avg): {T_avg:.4f}")
 print(f"Average Energy Consumption (E_avg): {E_avg_result:.4f}")
 print(f"Final Virtual Queue Level (Q_final): {Q_final:.4f}")
+print(f"Average Throughput (tasks/slot): {Avg_Throughput:.4f}")
+print(f"Overall Offloading Ratio: {OOR:.4f}")
+print(f"Avg Energy per Task (E/task): {E_per_Task:.4f}")
